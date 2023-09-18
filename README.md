@@ -46,7 +46,7 @@ grohe_sense:
 ```
 grohe_sense:
   GroheSenseUser: "your_grohe_username"
-GroheSensePassword: "your_grohe_password"
+  GroheSensePassword: "your_grohe_password"
 ```
 
 ## Remarks on the "API"
