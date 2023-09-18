@@ -50,6 +50,8 @@ grohe_sense:
 ```
 
 ## Remarks on the "API"
+API data url updated 2023-09-18: /data -> /data/aggregated
+
 I have not seen any documentation from Grohe on the API this integration is using, so likely it was only intended for their app. Breaking changes have happened previously, and can easily happen again. I make no promises that I'll maintain this module when that happens.
 
 The API returns _much_ more detailed data than is exposed via these sensors. For withdrawals, it returns an exact start- and endtime for each withdrawal, as well as volume withdrawn. It seems to store data since the water meter was installed, so you can extract a lot of historic data (but then polling gets a bit slow). I'm not aware of any good way to expose time series data like this in home assistant (suddenly I learn that 2 liters was withdrawn 5 minutes ago, and 5 liters was withdrawn 2 minutes ago). If anyone has any good ideas/pointers, that'd be appreciated.
