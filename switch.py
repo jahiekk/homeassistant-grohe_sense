@@ -6,7 +6,7 @@ from homeassistant.helpers.entity import Entity
 from homeassistant.util import Throttle
 from homeassistant.const import (STATE_UNKNOWN)
 
-from . import (DOMAIN, BASE_URL, GROHE_SENSE_TYPE, GROHE_SENSE_GUARD_TYPE)
+from . import (DOMAIN, LOCATIONS, GROHE_SENSE_TYPE, GROHE_SENSE_GUARD_TYPE)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ class GroheSenseGuardValve(SwitchEntity):
 
     @Throttle(VALVE_UPDATE_DELAY)
     async def async_update(self):
-        command_response = await self._auth_session.get(BASE_URL + f'locations/{self._locationId}/rooms/{self._roomId}/appliances/{self._applianceId}/command')
+        command_response = await self._auth_session.get(f'{LOCATIONS}/{self._locationId}/rooms/{self._roomId}/appliances/{self._applianceId}/command')
         if 'command' in command_response and 'valve_open' in command_response['command']:
             self._is_on = command_response['command']['valve_open']
         else:
@@ -58,7 +58,7 @@ class GroheSenseGuardValve(SwitchEntity):
 
     async def _set_state(self, state):
         data = { 'type': GROHE_SENSE_GUARD_TYPE, 'command': { 'valve_open': state } }
-        command_response = await self._auth_session.post(BASE_URL + f'locations/{self._locationId}/rooms/{self._roomId}/appliances/{self._applianceId}/command', data)
+        command_response = await self._auth_session.post(f'{LOCATIONS}/{self._locationId}/rooms/{self._roomId}/appliances/{self._applianceId}/command', data)
         if 'command' in command_response and 'valve_open' in command_response['command']:
             self._is_on = command_response['command']['valve_open']
         else:

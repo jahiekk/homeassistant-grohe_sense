@@ -1,28 +1,34 @@
 import logging
 import asyncio
 import collections
+import time
 
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
 
 from homeassistant.helpers import aiohttp_client
+from .refresh_token import get_refresh_token
 
 _LOGGER = logging.getLogger(__name__)
 
 DOMAIN = 'grohe_sense'
-
-CONF_REFRESH_TOKEN = 'refresh_token'
+CONF_USERNAME = 'username'
+CONF_PASSWORD = 'password'
 
 CONFIG_SCHEMA = vol.Schema(
     {
         DOMAIN: vol.Schema({
-            vol.Required(CONF_REFRESH_TOKEN): cv.string,
+            vol.Required(CONF_USERNAME): cv.string,
+            vol.Required(CONF_PASSWORD): cv.string
         }),
     },
     extra=vol.ALLOW_EXTRA,
 )
 
-BASE_URL = 'https://idp2-apigw.cloud.grohe.com/v3/iot/'
+BASE_URL = 'https://idp2-apigw.cloud.grohe.com/'
+LOGIN = BASE_URL + 'v3/iot/oidc/login'
+LOCATIONS = BASE_URL + 'v3/iot/locations'
+REFRESH = BASE_URL + 'v3/iot/oidc/refresh'
 
 GROHE_SENSE_TYPE = 101 # Type identifier for the battery powered water detector
 GROHE_SENSE_GUARD_TYPE = 103 # Type identifier for sense guard, the water guard installed on your water pipe
@@ -32,28 +38,28 @@ GroheDevice = collections.namedtuple('GroheDevice', ['locationId', 'roomId', 'ap
 async def async_setup(hass, config):
     _LOGGER.debug("Loading Grohe Sense")
 
-    await initialize_shared_objects(hass, config.get(DOMAIN).get(CONF_REFRESH_TOKEN))
+    await initialize_shared_objects(hass, config.get(DOMAIN).get(CONF_USERNAME), config.get(DOMAIN).get(CONF_PASSWORD))
 
     await hass.helpers.discovery.async_load_platform('sensor', DOMAIN, {}, config)
     await hass.helpers.discovery.async_load_platform('switch', DOMAIN, {}, config)
     return True
 
-async def initialize_shared_objects(hass, refresh_token):
+async def initialize_shared_objects(hass, username, password):
     session = aiohttp_client.async_get_clientsession(hass)
-    auth_session = OauthSession(session, refresh_token)
+    auth_session = OauthSession(hass, session, username, password)
     devices = []
 
     hass.data[DOMAIN] = { 'session': auth_session, 'devices': devices }
 
-    locations = await auth_session.get(BASE_URL + f'locations')
+    locations = await auth_session.get(LOCATIONS)
     for location in locations:
         _LOGGER.debug('Found location %s', location)
         locationId = location['id']
-        rooms = await auth_session.get(BASE_URL + f'locations/{locationId}/rooms')
+        rooms = await auth_session.get(f'{LOCATIONS}/{locationId}/rooms')
         for room in rooms:
             _LOGGER.debug('Found room %s', room)
             roomId = room['id']
-            appliances = await auth_session.get(BASE_URL + f'locations/{locationId}/rooms/{roomId}/appliances')
+            appliances = await auth_session.get(f'{LOCATIONS}/{locationId}/rooms/{roomId}/appliances')
             for appliance in appliances:
                 _LOGGER.debug('Found appliance %s', appliance)
                 applianceId = appliance['appliance_id']
@@ -65,37 +71,60 @@ class OauthException(Exception):
         self.reason = reason
 
 class OauthSession:
-    def __init__(self, session, refresh_token):
+    def __init__(self, hass, session, username, password):
+        self._hass = hass
         self._session = session
-        self._refresh_token = refresh_token
+        self._username = username
+        self._password = password
+        self._refresh_token = None
         self._access_token = None
         self._fetching_new_token = None
+
+    def get_refresh_token(self):
+        return get_refresh_token(self._username, self._password, BASE_URL, LOGIN)
 
     @property
     def session(self):
         return self._session
 
-    async def token(self, old_token=None):
+    async def token(self, old_token=None, forceRefesh=False):
         """ Returns an authorization header. If one is supplied as old_token, invalidate that one """
         if self._access_token not in (None, old_token):
             return self._access_token
 
-        if self._fetching_new_token is not None:
+        if forceRefesh is True:
+            self._refresh_token = None
+        elif self._fetching_new_token is not None:
             await self._fetching_new_token.wait()
             return self._access_token
-
-        self._access_token = None
-        self._fetching_new_token = asyncio.Event()
-        data = { 'refresh_token': self._refresh_token }
-        headers = { 'Content-Type': 'application/json' }
-
-        refresh_response = await self._http_request(BASE_URL + 'oidc/refresh', 'post', headers=headers, json=data)
-        if not 'access_token' in refresh_response:
-            _LOGGER.error('OAuth token refresh did not yield access token! Got back %s', refresh_response)
         else:
-            self._access_token = 'Bearer ' + refresh_response['access_token']
+            self._access_token = None
+            self._fetching_new_token = asyncio.Event()
 
-        self._fetching_new_token.set()
+        if self._refresh_token is not None:
+            data = { 'refresh_token': self._refresh_token }
+            headers = { 'Content-Type': 'application/json' }
+        
+            refresh_response = await self._http_request(REFRESH, 'post', headers=headers, json=data)
+            if not 'access_token' in refresh_response:
+                _LOGGER.error('OAuth token refresh did not yield access token! Got back %s', refresh_response)
+            else:
+                self._access_token = 'Bearer ' + refresh_response['access_token'] 
+        else:
+            _LOGGER.debug('Trying to get refresh token using username %s and password %s', self._username, self._password)
+            _token = await self._hass.async_add_executor_job(self.get_refresh_token)
+            if _token is not None:
+                self._refresh_token = _token['refresh_token']
+                _LOGGER.debug('Refresh token received: %s', self._refresh_token)
+                self._access_token = 'Bearer ' + _token['access_token']
+                _LOGGER.debug('Access token received: %s', self._access_token)
+            else:
+                _LOGGER.debug('Unable to get refresh_token')
+                raise OauthException("401", "Unable to get refresh_token")
+        
+        if self._fetching_new_token is not None:
+            self._fetching_new_token.set()
+        
         self._fetching_new_token = None
         return self._access_token
 
@@ -109,6 +138,7 @@ class OauthSession:
         _LOGGER.debug('Making http %s request to %s, headers %s', method, url, headers)
         headers = headers.copy()
         tries = 0
+        token = None
         while True:
             if auth_token != None:
                 # Cache token so we know which token was used for this request,
@@ -125,8 +155,7 @@ class OauthSession:
                             _LOGGER.debug('Request to %s returned status %d, refreshing auth token', url, response.status)
                             token = await auth_token.token(token)
                         else:
-                            _LOGGER.error('Grohe sense refresh token is invalid (or expired), please update your configuration with a new refresh token')
-                            raise OauthException(response.status, await response.text())
+                            token = await self.token(token, True)
                     else:
                         _LOGGER.debug('Request to %s returned status %d, %s', url, response.status, await response.text())
             except OauthException as oe:
@@ -136,4 +165,3 @@ class OauthSession:
 
             tries += 1
             await asyncio.sleep(min(600, 2**tries))
-

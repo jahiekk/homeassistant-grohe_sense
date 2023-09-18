@@ -2,14 +2,15 @@ import logging
 import asyncio
 import collections
 from datetime import (datetime, timezone, timedelta)
+from dateutil import parser
 
 from homeassistant.helpers.entity import Entity
 from homeassistant.util import Throttle
-from homeassistant.const import (STATE_UNAVAILABLE, STATE_UNKNOWN, TEMP_CELSIUS, DEVICE_CLASS_TEMPERATURE, PERCENTAGE, DEVICE_CLASS_HUMIDITY, VOLUME_FLOW_RATE_CUBIC_METERS_PER_HOUR, PRESSURE_MBAR, DEVICE_CLASS_PRESSURE, TEMP_CELSIUS, DEVICE_CLASS_TEMPERATURE, VOLUME_LITERS)
+from homeassistant.const import (STATE_UNAVAILABLE, STATE_UNKNOWN, TEMP_CELSIUS, DEVICE_CLASS_TEMPERATURE, PERCENTAGE, DEVICE_CLASS_HUMIDITY, VOLUME_FLOW_RATE_CUBIC_METERS_PER_HOUR, PRESSURE_BAR, DEVICE_CLASS_PRESSURE, TEMP_CELSIUS, DEVICE_CLASS_TEMPERATURE, VOLUME_LITERS)
 
 from homeassistant.helpers import aiohttp_client
 
-from . import (DOMAIN, BASE_URL, GROHE_SENSE_TYPE, GROHE_SENSE_GUARD_TYPE)
+from . import (DOMAIN, LOCATIONS, GROHE_SENSE_TYPE, GROHE_SENSE_GUARD_TYPE)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ SENSOR_TYPES = {
         'temperature': SensorType(TEMP_CELSIUS, DEVICE_CLASS_TEMPERATURE, lambda x : x),
         'humidity': SensorType(PERCENTAGE, DEVICE_CLASS_HUMIDITY, lambda x : x),
         'flowrate': SensorType(VOLUME_FLOW_RATE_CUBIC_METERS_PER_HOUR, None, lambda x : x * 3.6),
-        'pressure': SensorType(PRESSURE_MBAR, DEVICE_CLASS_PRESSURE, lambda x : x * 1000),
+        'pressure': SensorType(PRESSURE_BAR, DEVICE_CLASS_PRESSURE, lambda x : x),
         'temperature_guard': SensorType(TEMP_CELSIUS, DEVICE_CLASS_TEMPERATURE, lambda x : x),
         }
 
@@ -89,6 +90,7 @@ class GroheSenseGuardReader:
         self._withdrawals = []
         self._measurements = {}
         self._poll_from = datetime.now(tz=timezone.utc) - timedelta(7)
+        self._poll_from_format = self._poll_from.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
         self._fetching_data = None
         self._data_fetch_completed = datetime.min
 
@@ -105,44 +107,41 @@ class GroheSenseGuardReader:
         # XXX: Hardcoded 15 minute interval for now. Would be prettier to set this a bit more dynamically
         # based on the json response for the sense guard, and probably hardcode something longer for the sense.
         if datetime.now() - self._data_fetch_completed < timedelta(minutes=15):
-            _LOGGER.debug('Skipping fetching new data, time since last fetch was only %s', datetime.now() - self._data_fetch_completed)
+            #_LOGGER.debug('Skipping fetching new data, time since last fetch was only %s', datetime.now() - self._data_fetch_completed)
             return
 
         _LOGGER.debug("Fetching new data for appliance %s", self._applianceId)
         self._fetching_data = asyncio.Event()
 
         def parse_time(s):
-            # XXX: Fix for python 3.6 - Grohe emits time zone as "+HH:MM", python 3.6's %z only accepts the format +HHMM
-            # So, some ugly code to remove the colon for now...
-            if s.rfind(':') > s.find('+'):
-                s = s[:s.rfind(':')] + s[s.rfind(':')+1:]
-            return datetime.strptime(s, '%Y-%m-%dT%H:%M:%S.%f%z')
+            x = parser.parse(s)
+            return x.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
 
         poll_from=self._poll_from.strftime('%Y-%m-%d')
-        measurements_response = await self._auth_session.get(BASE_URL + f'locations/{self._locationId}/rooms/{self._roomId}/appliances/{self._applianceId}/data?from={poll_from}')
+        measurements_response = await self._auth_session.get(f'{LOCATIONS}/{self._locationId}/rooms/{self._roomId}/appliances/{self._applianceId}/data/aggregated?groupBy=hour&from={poll_from}')
         if 'withdrawals' in measurements_response['data']:
             withdrawals = measurements_response['data']['withdrawals']
             _LOGGER.debug('Received %d withdrawals in response', len(withdrawals))
             for w in withdrawals:
-                w['starttime'] = parse_time(w['starttime'])
-            withdrawals = [ w for w in withdrawals if w['starttime'] > self._poll_from]
-            withdrawals.sort(key = lambda x: x['starttime'])
+                w['date'] = parse_time(w['date'])
+            withdrawals = [ w for w in withdrawals if w['date'] > self._poll_from_format]
+            withdrawals.sort(key = lambda x: x['date'])
 
             _LOGGER.debug('Got %d new withdrawals totaling %f volume', len(withdrawals), sum((w['waterconsumption'] for w in withdrawals)))
             self._withdrawals += withdrawals
             if len(self._withdrawals) > 0:
-                self._poll_from = max(self._poll_from, self._withdrawals[-1]['starttime'])
+                self._poll_from = max(self._poll_from_format, self._withdrawals[-1]['date'])
         elif self._type != GROHE_SENSE_TYPE:
             _LOGGER.info('Data response for appliance %s did not contain any withdrawals data', self._applianceId)
 
         if 'measurement' in measurements_response['data']:
             measurements = measurements_response['data']['measurement']
-            measurements.sort(key = lambda x: x['timestamp'])
+            measurements.sort(key = lambda x: x['date'])
             if len(measurements):
                 for key in SENSOR_TYPES_PER_UNIT[self._type]:
                     if key in measurements[-1]:
                         self._measurements[key] = measurements[-1][key]
-                self._poll_from = max(self._poll_from, parse_time(measurements[-1]['timestamp']))
+                self._poll_from = max(self._poll_from_format, parse_time(measurements[-1]['date']))
         else:
             _LOGGER.info('Data response for appliance %s did not contain any measurements data', self._applianceId)
 
@@ -155,7 +154,7 @@ class GroheSenseGuardReader:
     def consumption(self, since):
         # XXX: As self._withdrawals is sorted, we could speed this up by a binary search,
         #      but most likely data sets are small enough that a linear scan is fine.
-        return sum((w['waterconsumption'] for w in self._withdrawals if w['starttime'] >= since))
+        return sum((w['waterconsumption'] for w in self._withdrawals if w['date'] >= since))
 
     def measurement(self, key):
         if key in self._measurements:
@@ -186,7 +185,7 @@ class GroheSenseNotificationEntity(Entity):
 
     @Throttle(NOTIFICATION_UPDATE_DELAY)
     async def async_update(self):
-        self._notifications = await self._auth_session.get(BASE_URL + f'locations/{self._locationId}/rooms/{self._roomId}/appliances/{self._applianceId}/notifications')
+        self._notifications = await self._auth_session.get(f'{LOCATIONS}/{self._locationId}/rooms/{self._roomId}/appliances/{self._applianceId}/notifications')
 
 
 class GroheSenseGuardWithdrawalsEntity(Entity):
@@ -213,7 +212,7 @@ class GroheSenseGuardWithdrawalsEntity(Entity):
             since = datetime.now().astimezone().replace(hour=0,minute=0,second=0,microsecond=0)
         else: # otherwise, it's a rolling X day average
             since = datetime.now(tz=timezone.utc) - timedelta(self._days)
-        return self._reader.consumption(since)
+        return self._reader.consumption(since.strftime('%Y-%m-%dT%H:%M:%S.%f%z'))
 
     async def async_update(self):
         await self._reader.async_update()
