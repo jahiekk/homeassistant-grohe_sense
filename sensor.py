@@ -89,8 +89,7 @@ class GroheSenseGuardReader:
 
         self._withdrawals = []
         self._measurements = {}
-        self._poll_from = datetime.now(tz=timezone.utc) - timedelta(7)
-        self._poll_from_format = self._poll_from.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
+        self._poll_from = datetime.now() - timedelta(7)
         self._fetching_data = None
         self._data_fetch_completed = datetime.min
 
@@ -110,12 +109,11 @@ class GroheSenseGuardReader:
             #_LOGGER.debug('Skipping fetching new data, time since last fetch was only %s', datetime.now() - self._data_fetch_completed)
             return
 
-        _LOGGER.debug("Fetching new data for appliance %s", self._applianceId)
+        _LOGGER.debug("Fetching new data for appliance %s, Poll from: %s", self._applianceId, self._poll_from)
         self._fetching_data = asyncio.Event()
 
         def parse_time(s):
-            x = parser.parse(s)
-            return x.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
+            return parser.parse(s)
 
         poll_from=self._poll_from.strftime('%Y-%m-%d')
         measurements_response = await self._auth_session.get(f'{LOCATIONS}/{self._locationId}/rooms/{self._roomId}/appliances/{self._applianceId}/data/aggregated?groupBy=hour&from={poll_from}')
@@ -124,13 +122,13 @@ class GroheSenseGuardReader:
             _LOGGER.debug('Received %d withdrawals in response', len(withdrawals))
             for w in withdrawals:
                 w['date'] = parse_time(w['date'])
-            withdrawals = [ w for w in withdrawals if w['date'] > self._poll_from_format]
+            withdrawals = [ w for w in withdrawals if w['date'] > self._poll_from]
             withdrawals.sort(key = lambda x: x['date'])
 
             _LOGGER.debug('Got %d new withdrawals totaling %f volume', len(withdrawals), sum((w['waterconsumption'] for w in withdrawals)))
             self._withdrawals += withdrawals
             if len(self._withdrawals) > 0:
-                self._poll_from = max(self._poll_from_format, self._withdrawals[-1]['date'])
+                self._poll_from = max(self._poll_from, self._withdrawals[-1]['date'])
         elif self._type != GROHE_SENSE_TYPE:
             _LOGGER.info('Data response for appliance %s did not contain any withdrawals data', self._applianceId)
 
@@ -141,7 +139,7 @@ class GroheSenseGuardReader:
                 for key in SENSOR_TYPES_PER_UNIT[self._type]:
                     if key in measurements[-1]:
                         self._measurements[key] = measurements[-1][key]
-                self._poll_from = max(self._poll_from_format, parse_time(measurements[-1]['date']))
+                self._poll_from = max(self._poll_from, parse_time(measurements[-1]['date']))
         else:
             _LOGGER.info('Data response for appliance %s did not contain any measurements data', self._applianceId)
 
@@ -209,10 +207,10 @@ class GroheSenseGuardWithdrawalsEntity(Entity):
     @property
     def state(self):
         if self._days == 1: # special case, if we're averaging over 1 day, just count since midnight local time
-            since = datetime.now().astimezone().replace(hour=0,minute=0,second=0,microsecond=0)
+            since = datetime.now().replace(hour=0,minute=0,second=0,microsecond=0)
         else: # otherwise, it's a rolling X day average
-            since = datetime.now(tz=timezone.utc) - timedelta(self._days)
-        return self._reader.consumption(since.strftime('%Y-%m-%dT%H:%M:%S.%f%z'))
+            since = datetime.now() - timedelta(self._days)
+        return self._reader.consumption(since)
 
     async def async_update(self):
         await self._reader.async_update()
