@@ -122,13 +122,10 @@ class GroheSenseGuardReader:
             _LOGGER.debug('Received %d withdrawals in response', len(withdrawals))
             for w in withdrawals:
                 w['date'] = parse_time(w['date'])
-            withdrawals = [ w for w in withdrawals if w['date'] > self._poll_from]
             withdrawals.sort(key = lambda x: x['date'])
 
             _LOGGER.debug('Got %d new withdrawals totaling %f volume', len(withdrawals), sum((w['waterconsumption'] for w in withdrawals)))
-            self._withdrawals += withdrawals
-            if len(self._withdrawals) > 0:
-                self._poll_from = max(self._poll_from, self._withdrawals[-1]['date'])
+            self._withdrawals = withdrawals
         elif self._type != GROHE_SENSE_TYPE:
             _LOGGER.info('Data response for appliance %s did not contain any withdrawals data', self._applianceId)
 
@@ -139,12 +136,11 @@ class GroheSenseGuardReader:
                 for key in SENSOR_TYPES_PER_UNIT[self._type]:
                     if key in measurements[-1]:
                         self._measurements[key] = measurements[-1][key]
-                self._poll_from = max(self._poll_from, parse_time(measurements[-1]['date']))
         else:
             _LOGGER.info('Data response for appliance %s did not contain any measurements data', self._applianceId)
 
-
         self._data_fetch_completed = datetime.now()
+        self._poll_from = datetime.now() - timedelta(7)
 
         self._fetching_data.set()
         self._fetching_data = None
@@ -152,7 +148,9 @@ class GroheSenseGuardReader:
     def consumption(self, since):
         # XXX: As self._withdrawals is sorted, we could speed this up by a binary search,
         #      but most likely data sets are small enough that a linear scan is fine.
-        return sum((w['waterconsumption'] for w in self._withdrawals if w['date'] >= since))
+        calculated = sum((w['waterconsumption'] for w in self._withdrawals if w['date'] >= since))
+        _LOGGER.info('Comsumption sum %d for since date %s', calculated, since)
+        return calculated
 
     def measurement(self, key):
         if key in self._measurements:
