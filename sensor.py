@@ -88,7 +88,8 @@ class GroheSenseGuardReader:
         self._type = device_type
 
         self._withdrawals = []
-        self._measurements = {}
+        self._measurement = {}
+        self._measurements = []
         self._poll_from = datetime.now() - timedelta(7)
         self._fetching_data = None
         self._data_fetch_completed = datetime.min
@@ -132,10 +133,11 @@ class GroheSenseGuardReader:
         if 'measurement' in measurements_response['data']:
             measurements = measurements_response['data']['measurement']
             measurements.sort(key = lambda x: x['date'])
+            self._measurements = measurements
             if len(measurements):
                 for key in SENSOR_TYPES_PER_UNIT[self._type]:
                     if key in measurements[-1]:
-                        self._measurements[key] = measurements[-1][key]
+                        self._measurement[key] = measurements[-1][key]
         else:
             _LOGGER.info('Data response for appliance %s did not contain any measurements data', self._applianceId)
 
@@ -153,9 +155,12 @@ class GroheSenseGuardReader:
         return calculated
 
     def measurement(self, key):
-        if key in self._measurements:
-            return self._measurements[key]
+        if key in self._measurement:
+            return self._measurement[key]
         return STATE_UNKNOWN
+
+    def measurements(self):
+        return self._measurements
 
 
 class GroheSenseNotificationEntity(Entity):
@@ -219,6 +224,8 @@ class GroheSenseSensorEntity(Entity):
         self._name = name
         self._key = key
 
+        self._measurements = []
+
     @property
     def name(self):
         return '{} {}'.format(self._name, self._key)
@@ -241,3 +248,11 @@ class GroheSenseSensorEntity(Entity):
 
     async def async_update(self):
         await self._reader.async_update()
+        self._measurements = self._reader.measurements()
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return entity specific state attributes."""
+        return { 
+            "measurement_data": self._measurements
+        }
