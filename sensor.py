@@ -133,7 +133,10 @@ class GroheSenseGuardReader:
         if 'measurement' in measurements_response['data']:
             measurements = measurements_response['data']['measurement']
             measurements.sort(key = lambda x: x['date'])
-            self._measurements = measurements
+            
+            if self._type == GROHE_SENSE_TYPE:
+                self._measurements = measurements
+
             if len(measurements):
                 for key in SENSOR_TYPES_PER_UNIT[self._type]:
                     if key in measurements[-1]:
