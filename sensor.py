@@ -6,7 +6,7 @@ from dateutil import parser
 
 from homeassistant.helpers.entity import Entity
 from homeassistant.util import Throttle
-from homeassistant.const import (STATE_UNAVAILABLE, STATE_UNKNOWN, TEMP_CELSIUS, DEVICE_CLASS_TEMPERATURE, PERCENTAGE, DEVICE_CLASS_HUMIDITY, VOLUME_FLOW_RATE_CUBIC_METERS_PER_HOUR, PRESSURE_BAR, DEVICE_CLASS_PRESSURE, TEMP_CELSIUS, DEVICE_CLASS_TEMPERATURE, VOLUME_LITERS)
+from homeassistant.const import (STATE_UNAVAILABLE, STATE_UNKNOWN, TEMP_CELSIUS, DEVICE_CLASS_TEMPERATURE, PERCENTAGE, DEVICE_CLASS_HUMIDITY, DEVICE_CLASS_BATTERY, VOLUME_FLOW_RATE_CUBIC_METERS_PER_HOUR, PRESSURE_BAR, DEVICE_CLASS_PRESSURE, TEMP_CELSIUS, DEVICE_CLASS_TEMPERATURE, VOLUME_LITERS)
 
 from homeassistant.helpers import aiohttp_client
 
@@ -17,17 +17,17 @@ _LOGGER = logging.getLogger(__name__)
 
 SensorType = collections.namedtuple('SensorType', ['unit', 'device_class', 'function'])
 
-
 SENSOR_TYPES = {
         'temperature': SensorType(TEMP_CELSIUS, DEVICE_CLASS_TEMPERATURE, lambda x : x),
         'humidity': SensorType(PERCENTAGE, DEVICE_CLASS_HUMIDITY, lambda x : x),
+        'battery': SensorType(PERCENTAGE, DEVICE_CLASS_BATTERY, lambda x : x),
         'flowrate': SensorType(VOLUME_FLOW_RATE_CUBIC_METERS_PER_HOUR, None, lambda x : x * 3.6),
         'pressure': SensorType(PRESSURE_BAR, DEVICE_CLASS_PRESSURE, lambda x : x),
         'temperature_guard': SensorType(TEMP_CELSIUS, DEVICE_CLASS_TEMPERATURE, lambda x : x),
         }
 
 SENSOR_TYPES_PER_UNIT = {
-        GROHE_SENSE_TYPE: [ 'temperature', 'humidity'],
+        GROHE_SENSE_TYPE: [ 'temperature', 'humidity', 'battery'],
         GROHE_SENSE_GUARD_TYPE: [ 'flowrate', 'pressure', 'temperature_guard']
         }
 
@@ -134,15 +134,21 @@ class GroheSenseGuardReader:
             measurements = measurements_response['data']['measurement']
             measurements.sort(key = lambda x: x['date'])
             
-            if self._type == GROHE_SENSE_TYPE:
-                self._measurements = measurements
-
             if len(measurements):
                 for key in SENSOR_TYPES_PER_UNIT[self._type]:
                     if key in measurements[-1]:
                         self._measurement[key] = measurements[-1][key]
+                if self._type == GROHE_SENSE_TYPE:
+                    self._measurements = measurements
         else:
             _LOGGER.info('Data response for appliance %s did not contain any measurements data', self._applianceId)
+
+        status_response = await self._auth_session.get(f'{LOCATIONS}/{self._locationId}/rooms/{self._roomId}/appliances/{self._applianceId}/status')
+        if len(status_response):
+            for item in status_response:
+                for key in SENSOR_TYPES_PER_UNIT[GROHE_SENSE_TYPE]:
+                    if item['type'] == key:
+                        self._measurement[key] = item['value']
 
         self._data_fetch_completed = datetime.now()
         self._poll_from = datetime.now() - timedelta(7)
@@ -251,7 +257,8 @@ class GroheSenseSensorEntity(Entity):
 
     async def async_update(self):
         await self._reader.async_update()
-        self._measurements = self._reader.measurements()
+        if self._key == 'temperature' or self._key == 'humidity':
+            self._measurements = self._reader.measurements()
 
     @property
     def extra_state_attributes(self) -> dict:
