@@ -6,10 +6,17 @@ from dateutil import parser
 
 from homeassistant.helpers.entity import Entity
 from homeassistant.util import Throttle
-from homeassistant.const import (STATE_UNAVAILABLE, STATE_UNKNOWN, TEMP_CELSIUS, DEVICE_CLASS_TEMPERATURE, PERCENTAGE, DEVICE_CLASS_HUMIDITY, DEVICE_CLASS_BATTERY, VOLUME_FLOW_RATE_CUBIC_METERS_PER_HOUR, PRESSURE_BAR, DEVICE_CLASS_PRESSURE, TEMP_CELSIUS, DEVICE_CLASS_TEMPERATURE, VOLUME_LITERS)
-
+from homeassistant.components.sensor import (SensorDeviceClass)
+from homeassistant.const import (
+    STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
+    UnitOfTemperature,
+    UnitOfPressure,
+    UnitOfVolume,
+    UnitOfVolumeFlowRate,
+    PERCENTAGE
+    )
 from homeassistant.helpers import aiohttp_client
-
 from . import (DOMAIN, LOCATIONS, GROHE_SENSE_TYPE, GROHE_SENSE_GUARD_TYPE)
 
 _LOGGER = logging.getLogger(__name__)
@@ -18,12 +25,12 @@ _LOGGER = logging.getLogger(__name__)
 SensorType = collections.namedtuple('SensorType', ['unit', 'device_class', 'function'])
 
 SENSOR_TYPES = {
-        'temperature': SensorType(TEMP_CELSIUS, DEVICE_CLASS_TEMPERATURE, lambda x : x),
-        'humidity': SensorType(PERCENTAGE, DEVICE_CLASS_HUMIDITY, lambda x : x),
-        'battery': SensorType(PERCENTAGE, DEVICE_CLASS_BATTERY, lambda x : x),
-        'flowrate': SensorType(VOLUME_FLOW_RATE_CUBIC_METERS_PER_HOUR, None, lambda x : x * 3.6),
-        'pressure': SensorType(PRESSURE_BAR, DEVICE_CLASS_PRESSURE, lambda x : x),
-        'temperature_guard': SensorType(TEMP_CELSIUS, DEVICE_CLASS_TEMPERATURE, lambda x : x),
+        'temperature': SensorType(UnitOfTemperature.CELSIUS, SensorDeviceClass.TEMPERATURE, lambda x : x),
+        'humidity': SensorType(PERCENTAGE, SensorDeviceClass.HUMIDITY, lambda x : x),
+        'battery': SensorType(PERCENTAGE, SensorDeviceClass.BATTERY, lambda x : x),
+        'flowrate': SensorType(UnitOfVolumeFlowRate.CUBIC_METERS_PER_HOUR, None, lambda x : x * 3.6),
+        'pressure': SensorType(UnitOfPressure.BAR, SensorDeviceClass.PRESSURE, lambda x : x),
+        'temperature_guard': SensorType(UnitOfTemperature.CELSIUS, SensorDeviceClass.TEMPERATURE, lambda x : x),
         }
 
 SENSOR_TYPES_PER_UNIT = {
@@ -214,7 +221,7 @@ class GroheSenseGuardWithdrawalsEntity(Entity):
 
     @property
     def unit_of_measurement(self):
-        return VOLUME_LITERS
+        return UnitOfVolume.LITERS
 
     @property
     def state(self):
