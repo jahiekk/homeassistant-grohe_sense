@@ -3,10 +3,12 @@ import asyncio
 import collections
 import time
 
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.discovery import async_load_platform
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
 
-from homeassistant.helpers import aiohttp_client
 from .refresh_token import get_refresh_token
 
 _LOGGER = logging.getLogger(__name__)
@@ -35,17 +37,17 @@ GROHE_SENSE_GUARD_TYPE = 103 # Type identifier for sense guard, the water guard 
 
 GroheDevice = collections.namedtuple('GroheDevice', ['locationId', 'roomId', 'applianceId', 'type', 'name'])
 
-async def async_setup(hass, config):
+async def async_setup(hass: HomeAssistant, config):
     _LOGGER.debug("Loading Grohe Sense")
 
     await initialize_shared_objects(hass, config.get(DOMAIN).get(CONF_USERNAME), config.get(DOMAIN).get(CONF_PASSWORD))
 
-    await hass.helpers.discovery.async_load_platform('sensor', DOMAIN, {}, config)
-    await hass.helpers.discovery.async_load_platform('switch', DOMAIN, {}, config)
+    await async_load_platform(hass, 'sensor', DOMAIN, {}, config)
+    await async_load_platform(hass, 'switch', DOMAIN, {}, config)
     return True
 
 async def initialize_shared_objects(hass, username, password):
-    session = aiohttp_client.async_get_clientsession(hass)
+    session = async_get_clientsession(hass)
     auth_session = OauthSession(hass, session, username, password)
     devices = []
 
