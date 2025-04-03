@@ -125,7 +125,7 @@ class GroheSenseGuardReader:
 
         poll_from=self._poll_from.strftime('%Y-%m-%d')
         measurements_response = await self._auth_session.get(f'{LOCATIONS}/{self._locationId}/rooms/{self._roomId}/appliances/{self._applianceId}/data/aggregated?groupBy=hour&from={poll_from}')
-        if 'withdrawals' in measurements_response['data']:
+        if measurements_response is not None and 'withdrawals' in measurements_response['data']:
             withdrawals = measurements_response['data']['withdrawals']
             _LOGGER.debug('Received %d withdrawals in response', len(withdrawals))
             for w in withdrawals:
@@ -137,7 +137,7 @@ class GroheSenseGuardReader:
         elif self._type != GROHE_SENSE_TYPE:
             _LOGGER.info('Data response for appliance %s did not contain any withdrawals data', self._applianceId)
 
-        if 'measurement' in measurements_response['data']:
+        if measurements_response is not None and 'measurement' in measurements_response['data']:
             measurements = measurements_response['data']['measurement']
             measurements.sort(key = lambda x: x['date'])
             
@@ -177,6 +177,9 @@ class GroheSenseGuardReader:
 
     def measurements(self):
         return self._measurements
+        
+    def withdrawals(self):
+        return self._withdrawals
 
 
 class GroheSenseNotificationEntity(Entity):
@@ -194,11 +197,16 @@ class GroheSenseNotificationEntity(Entity):
 
     @property
     def state(self):
+        _LOGGER.debug("Handling notification %s", self._notifications)
         def truncate_string(l, s):
             if len(s) > l:
                 return s[:l-4] + ' ...'
             return s
-        return truncate_string(255, '\n'.join([NOTIFICATION_TYPES.get((n['category'], n['type']), 'Unknown notification: {}'.format(n)) for n in self._notifications]))
+            
+        notifications = self._notifications
+        if isinstance(notifications, list):
+            notifications = '\n'.join([NOTIFICATION_TYPES.get((n['category'], n['type']), 'Unknown notification: {}'.format(n)) for n in self._notifications])         
+        return truncate_string(255, notifications)
 
     @Throttle(NOTIFICATION_UPDATE_DELAY)
     async def async_update(self):
@@ -210,10 +218,18 @@ class GroheSenseGuardWithdrawalsEntity(Entity):
         self._reader = reader
         self._name = name
         self._days = days
+        
+        self._withdrawals = []
 
-    #@property
-    #def unique_id(self):
-    #    return '{}-{}'.format(self._reader.applianceId, self._days)
+    @property
+    def unique_id(self):
+        name = "grohe_%s_%s_%s" % (
+            self._name,
+            self._reader.applianceId,
+            self._days
+        )
+        name = name.lower().replace(".", "")
+        return name
 
     @property
     def name(self):
@@ -225,14 +241,22 @@ class GroheSenseGuardWithdrawalsEntity(Entity):
 
     @property
     def state(self):
-        if self._days == 1: # special case, if we're averaging over 1 day, just count since midnight local time
-            since = datetime.now().replace(hour=0,minute=0,second=0,microsecond=0)
-        else: # otherwise, it's a rolling X day average
-            since = datetime.now() - timedelta(self._days)
+        since = datetime.now().replace(hour=0,minute=0,second=0,microsecond=0)
+        if self._days != 1: 
+            since = since - timedelta(self._days)
+            
         return self._reader.consumption(since)
 
     async def async_update(self):
         await self._reader.async_update()
+        self._withdrawals = self._reader.withdrawals()
+        
+    @property
+    def extra_state_attributes(self) -> dict:
+        """Return entity specific state attributes."""
+        return { 
+            "withdrawal_data": self._withdrawals
+        }
 
 class GroheSenseSensorEntity(Entity):
     def __init__(self, reader, name, key):
