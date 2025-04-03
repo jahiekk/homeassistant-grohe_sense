@@ -158,7 +158,7 @@ class GroheSenseGuardReader:
                         self._measurement[key] = item['value']
 
         self._data_fetch_completed = datetime.now()
-        self._poll_from = datetime.now() - timedelta(7)
+        self._poll_from = (datetime.now() - timedelta(7)).replace(hour=0,minute=0,second=0,microsecond=0)
 
         self._fetching_data.set()
         self._fetching_data = None
